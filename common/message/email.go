@@ -5,11 +5,18 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"github.com/songquanpeng/one-api/common/config"
+	"net"
 	"net/smtp"
 	"strings"
 	"time"
+
+	"github.com/songquanpeng/one-api/common/config"
+	"github.com/songquanpeng/one-api/common/logger"
 )
+
+func shouldAuth() bool {
+	return config.SMTPAccount != "" || config.SMTPToken != ""
+}
 
 func SendEmail(subject string, receiver string, content string) error {
 	if receiver == "" {
@@ -41,16 +48,24 @@ func SendEmail(subject string, receiver string, content string) error {
 		"Date: %s\r\n"+
 		"Content-Type: text/html; charset=UTF-8\r\n\r\n%s\r\n",
 		receiver, config.SystemName, config.SMTPFrom, encodedSubject, messageId, time.Now().Format(time.RFC1123Z), content))
+
 	auth := smtp.PlainAuth("", config.SMTPAccount, config.SMTPToken, config.SMTPServer)
 	addr := fmt.Sprintf("%s:%d", config.SMTPServer, config.SMTPPort)
 	to := strings.Split(receiver, ";")
 
-	if config.SMTPPort == 465 {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         config.SMTPServer,
+	if config.SMTPPort == 465 || !shouldAuth() {
+		// need advanced client
+		var conn net.Conn
+		var err error
+		if config.SMTPPort == 465 {
+			tlsConfig := &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         config.SMTPServer,
+			}
+			conn, err = tls.Dial("tcp", fmt.Sprintf("%s:%d", config.SMTPServer, config.SMTPPort), tlsConfig)
+		} else {
+			conn, err = net.Dial("tcp", fmt.Sprintf("%s:%d", config.SMTPServer, config.SMTPPort))
 		}
-		conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", config.SMTPServer, config.SMTPPort), tlsConfig)
 		if err != nil {
 			return err
 		}
@@ -59,8 +74,10 @@ func SendEmail(subject string, receiver string, content string) error {
 			return err
 		}
 		defer client.Close()
-		if err = client.Auth(auth); err != nil {
-			return err
+		if shouldAuth() {
+			if err = client.Auth(auth); err != nil {
+				return err
+			}
 		}
 		if err = client.Mail(config.SMTPFrom); err != nil {
 			return err
@@ -83,8 +100,12 @@ func SendEmail(subject string, receiver string, content string) error {
 		if err != nil {
 			return err
 		}
-	} else {
-		err = smtp.SendMail(addr, auth, config.SMTPAccount, to, mail)
+		return nil
+	}
+	err = smtp.SendMail(addr, auth, config.SMTPAccount, to, mail)
+	if err != nil && strings.Contains(err.Error(), "short response") { // 部分提供商返回该错误，但实际上邮件已经发送成功
+		logger.SysWarnf("short response from SMTP server, return nil instead of error: %s", err.Error())
+		return nil
 	}
 	return err
 }

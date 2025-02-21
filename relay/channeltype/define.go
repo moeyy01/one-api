@@ -42,5 +42,16 @@ const (
 	DeepL
 	TogetherAI
 	Doubao
+	Novita
+	VertextAI
+	Proxy
+	SiliconFlow
+	XAI
+	Replicate
+	BaiduV2
+	XunfeiV2
+	AliBailian
+	OpenAICompatible
+	GeminiOpenAICompatible
 	Dummy
 )

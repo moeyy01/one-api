@@ -6,7 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
+
+	"github.com/songquanpeng/one-api/common"
 	"github.com/songquanpeng/one-api/common/ctxkey"
 	"github.com/songquanpeng/one-api/common/logger"
 	"github.com/songquanpeng/one-api/model"
@@ -16,17 +21,86 @@ import (
 	"github.com/songquanpeng/one-api/relay/channeltype"
 	"github.com/songquanpeng/one-api/relay/meta"
 	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	"io"
-	"net/http"
 )
 
-func isWithinRange(element string, value int) bool {
-	if _, ok := billingratio.ImageGenerationAmounts[element]; !ok {
-		return false
+func getImageRequest(c *gin.Context, _ int) (*relaymodel.ImageRequest, error) {
+	imageRequest := &relaymodel.ImageRequest{}
+	err := common.UnmarshalBodyReusable(c, imageRequest)
+	if err != nil {
+		return nil, err
 	}
-	min := billingratio.ImageGenerationAmounts[element][0]
-	max := billingratio.ImageGenerationAmounts[element][1]
-	return value >= min && value <= max
+	if imageRequest.N == 0 {
+		imageRequest.N = 1
+	}
+	if imageRequest.Size == "" {
+		imageRequest.Size = "1024x1024"
+	}
+	if imageRequest.Model == "" {
+		imageRequest.Model = "dall-e-2"
+	}
+	return imageRequest, nil
+}
+
+func isValidImageSize(model string, size string) bool {
+	if model == "cogview-3" || billingratio.ImageSizeRatios[model] == nil {
+		return true
+	}
+	_, ok := billingratio.ImageSizeRatios[model][size]
+	return ok
+}
+
+func isValidImagePromptLength(model string, promptLength int) bool {
+	maxPromptLength, ok := billingratio.ImagePromptLengthLimitations[model]
+	return !ok || promptLength <= maxPromptLength
+}
+
+func isWithinRange(element string, value int) bool {
+	amounts, ok := billingratio.ImageGenerationAmounts[element]
+	return !ok || (value >= amounts[0] && value <= amounts[1])
+}
+
+func getImageSizeRatio(model string, size string) float64 {
+	if ratio, ok := billingratio.ImageSizeRatios[model][size]; ok {
+		return ratio
+	}
+	return 1
+}
+
+func validateImageRequest(imageRequest *relaymodel.ImageRequest, _ *meta.Meta) *relaymodel.ErrorWithStatusCode {
+	// check prompt length
+	if imageRequest.Prompt == "" {
+		return openai.ErrorWrapper(errors.New("prompt is required"), "prompt_missing", http.StatusBadRequest)
+	}
+
+	// model validation
+	if !isValidImageSize(imageRequest.Model, imageRequest.Size) {
+		return openai.ErrorWrapper(errors.New("size not supported for this image model"), "size_not_supported", http.StatusBadRequest)
+	}
+
+	if !isValidImagePromptLength(imageRequest.Model, len(imageRequest.Prompt)) {
+		return openai.ErrorWrapper(errors.New("prompt is too long"), "prompt_too_long", http.StatusBadRequest)
+	}
+
+	// Number of generated images validation
+	if !isWithinRange(imageRequest.Model, imageRequest.N) {
+		return openai.ErrorWrapper(errors.New("invalid value of n"), "n_not_within_range", http.StatusBadRequest)
+	}
+	return nil
+}
+
+func getImageCostRatio(imageRequest *relaymodel.ImageRequest) (float64, error) {
+	if imageRequest == nil {
+		return 0, errors.New("imageRequest is nil")
+	}
+	imageCostRatio := getImageSizeRatio(imageRequest.Model, imageRequest.Size)
+	if imageRequest.Quality == "hd" && imageRequest.Model == "dall-e-3" {
+		if imageRequest.Size == "1024x1024" {
+			imageCostRatio *= 2
+		} else {
+			imageCostRatio *= 1.5
+		}
+	}
+	return imageCostRatio, nil
 }
 
 func RelayImageHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatusCode {
@@ -77,12 +151,12 @@ func RelayImageHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 	}
 	adaptor.Init(meta)
 
+	// these adaptors need to convert the request
 	switch meta.ChannelType {
-	case channeltype.Ali:
-		fallthrough
-	case channeltype.Baidu:
-		fallthrough
-	case channeltype.Zhipu:
+	case channeltype.Zhipu,
+		channeltype.Ali,
+		channeltype.Replicate,
+		channeltype.Baidu:
 		finalRequest, err := adaptor.ConvertImageRequest(imageRequest)
 		if err != nil {
 			return openai.ErrorWrapper(err, "convert_image_request_failed", http.StatusInternalServerError)
@@ -94,12 +168,19 @@ func RelayImageHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 		requestBody = bytes.NewBuffer(jsonStr)
 	}
 
-	modelRatio := billingratio.GetModelRatio(imageModel)
+	modelRatio := billingratio.GetModelRatio(imageModel, meta.ChannelType)
 	groupRatio := billingratio.GetGroupRatio(meta.Group)
 	ratio := modelRatio * groupRatio
 	userQuota, err := model.CacheGetUserQuota(ctx, meta.UserId)
 
-	quota := int64(ratio*imageCostRatio*1000) * int64(imageRequest.N)
+	var quota int64
+	switch meta.ChannelType {
+	case channeltype.Replicate:
+		// replicate always return 1 image
+		quota = int64(ratio * imageCostRatio * 1000)
+	default:
+		quota = int64(ratio*imageCostRatio*1000) * int64(imageRequest.N)
+	}
 
 	if userQuota-quota < 0 {
 		return openai.ErrorWrapper(errors.New("user quota is not enough"), "insufficient_user_quota", http.StatusForbidden)
@@ -113,7 +194,9 @@ func RelayImageHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 	}
 
 	defer func(ctx context.Context) {
-		if resp != nil && resp.StatusCode != http.StatusOK {
+		if resp != nil &&
+			resp.StatusCode != http.StatusCreated && // replicate returns 201
+			resp.StatusCode != http.StatusOK {
 			return
 		}
 
@@ -127,8 +210,17 @@ func RelayImageHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 		}
 		if quota != 0 {
 			tokenName := c.GetString(ctxkey.TokenName)
-			logContent := fmt.Sprintf("模型倍率 %.2f，分组倍率 %.2f", modelRatio, groupRatio)
-			model.RecordConsumeLog(ctx, meta.UserId, meta.ChannelId, 0, 0, imageRequest.Model, tokenName, quota, logContent)
+			logContent := fmt.Sprintf("倍率：%.2f × %.2f", modelRatio, groupRatio)
+			model.RecordConsumeLog(ctx, &model.Log{
+				UserId:           meta.UserId,
+				ChannelId:        meta.ChannelId,
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				ModelName:        imageRequest.Model,
+				TokenName:        tokenName,
+				Quota:            int(quota),
+				Content:          logContent,
+			})
 			model.UpdateUserUsedQuotaAndRequestCount(meta.UserId, quota)
 			channelId := c.GetInt(ctxkey.ChannelId)
 			model.UpdateChannelUsedQuota(channelId, quota)

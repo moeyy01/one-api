@@ -19,4 +19,6 @@ const (
 	TokenName         = "token_name"
 	BaseURL           = "base_url"
 	AvailableModels   = "available_models"
+	KeyRequestBody    = "key_request_body"
+	SystemPrompt      = "system_prompt"
 )

@@ -3,17 +3,23 @@ package openai
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
+
 	"github.com/songquanpeng/one-api/relay/adaptor"
+	"github.com/songquanpeng/one-api/relay/adaptor/alibailian"
+	"github.com/songquanpeng/one-api/relay/adaptor/baiduv2"
 	"github.com/songquanpeng/one-api/relay/adaptor/doubao"
+	"github.com/songquanpeng/one-api/relay/adaptor/geminiv2"
 	"github.com/songquanpeng/one-api/relay/adaptor/minimax"
+	"github.com/songquanpeng/one-api/relay/adaptor/novita"
 	"github.com/songquanpeng/one-api/relay/channeltype"
 	"github.com/songquanpeng/one-api/relay/meta"
 	"github.com/songquanpeng/one-api/relay/model"
 	"github.com/songquanpeng/one-api/relay/relaymode"
-	"io"
-	"net/http"
-	"strings"
 )
 
 type Adaptor struct {
@@ -48,6 +54,14 @@ func (a *Adaptor) GetRequestURL(meta *meta.Meta) (string, error) {
 		return minimax.GetRequestURL(meta)
 	case channeltype.Doubao:
 		return doubao.GetRequestURL(meta)
+	case channeltype.Novita:
+		return novita.GetRequestURL(meta)
+	case channeltype.BaiduV2:
+		return baiduv2.GetRequestURL(meta)
+	case channeltype.AliBailian:
+		return alibailian.GetRequestURL(meta)
+	case channeltype.GeminiOpenAICompatible:
+		return geminiv2.GetRequestURL(meta)
 	default:
 		return GetFullRequestURL(meta.BaseURL, meta.RequestURLPath, meta.ChannelType), nil
 	}
@@ -70,6 +84,13 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, meta *me
 func (a *Adaptor) ConvertRequest(c *gin.Context, relayMode int, request *model.GeneralOpenAIRequest) (any, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
+	}
+	if request.Stream {
+		// always return usage in stream mode
+		if request.StreamOptions == nil {
+			request.StreamOptions = &model.StreamOptions{}
+		}
+		request.StreamOptions.IncludeUsage = true
 	}
 	return request, nil
 }

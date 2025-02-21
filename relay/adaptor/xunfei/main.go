@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+
 	"github.com/songquanpeng/one-api/common"
 	"github.com/songquanpeng/one-api/common/helper"
 	"github.com/songquanpeng/one-api/common/logger"
@@ -44,7 +45,7 @@ func requestOpenAI2Xunfei(request model.GeneralOpenAIRequest, xunfeiAppId string
 	xunfeiRequest.Parameter.Chat.MaxTokens = request.MaxTokens
 	xunfeiRequest.Payload.Message.Text = messages
 
-	if strings.HasPrefix(domain, "generalv3") {
+	if strings.HasPrefix(domain, "generalv3") || domain == "4.0Ultra" {
 		functions := make([]model.Function, len(request.Tools))
 		for i, tool := range request.Tools {
 			functions[i] = tool.Function
@@ -269,33 +270,4 @@ func xunfeiMakeRequest(textRequest model.GeneralOpenAIRequest, domain, authUrl, 
 	}()
 
 	return dataChan, stopChan, nil
-}
-
-func parseAPIVersionByModelName(modelName string) string {
-	parts := strings.Split(modelName, "-")
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
-}
-
-// https://www.xfyun.cn/doc/spark/Web.html#_1-%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E
-func apiVersion2domain(apiVersion string) string {
-	switch apiVersion {
-	case "v1.1":
-		return "general"
-	case "v2.1":
-		return "generalv2"
-	case "v3.1":
-		return "generalv3"
-	case "v3.5":
-		return "generalv3.5"
-	}
-	return "general" + apiVersion
-}
-
-func getXunfeiAuthUrl(apiVersion string, apiKey string, apiSecret string) (string, string) {
-	domain := apiVersion2domain(apiVersion)
-	authUrl := buildXunfeiAuthUrl(fmt.Sprintf("wss://spark-api.xf-yun.com/%s/chat", apiVersion), apiKey, apiSecret)
-	return domain, authUrl
 }

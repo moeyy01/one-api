@@ -13,7 +13,7 @@ export const CHANNEL_OPTIONS = {
   },
   33: {
     key: 33,
-    text: 'AWS Claude',
+    text: 'AWS',
     value: 33,
     color: 'primary'
   },
@@ -49,7 +49,7 @@ export const CHANNEL_OPTIONS = {
   },
   40: {
     key: 40,
-    text: '字节跳动豆包',
+    text: '字节火山引擎',
     value: 40,
     color: 'primary'
   },
@@ -161,6 +161,42 @@ export const CHANNEL_OPTIONS = {
     value: 39,
     color: 'primary'
   },
+  42: {
+    key: 42,
+    text: 'VertexAI',
+    value: 42,
+    color: 'primary'
+  },
+  43: {
+    key: 43,
+    text: 'Proxy',
+    value: 43,
+    color: 'primary'
+  },
+  44: {
+    key: 44,
+    text: 'SiliconFlow',
+    value: 44,
+    color: 'primary'
+  },
+  45: {
+    key: 45,
+    text: 'xAI',
+    value: 45,
+    color: 'primary'
+  },
+  45: {
+    key: 46,
+    text: 'Replicate',
+    value: 46,
+    color: 'primary'
+  },
+  41: {
+    key: 41,
+    text: 'Novita',
+    value: 41,
+    color: 'purple'
+  },
   8: {
     key: 8,
     text: '自定义渠道',
@@ -181,7 +217,7 @@ export const CHANNEL_OPTIONS = {
   },
   20: {
     key: 20,
-    text: '代理：OpenRouter',
+      text: 'OpenRouter',
     value: 20,
     color: 'success'
   },

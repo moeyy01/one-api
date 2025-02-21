@@ -3,14 +3,16 @@ package openai
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/pkoukk/tiktoken-go"
+
 	"github.com/songquanpeng/one-api/common/config"
 	"github.com/songquanpeng/one-api/common/image"
 	"github.com/songquanpeng/one-api/common/logger"
 	billingratio "github.com/songquanpeng/one-api/relay/billing/ratio"
 	"github.com/songquanpeng/one-api/relay/model"
-	"math"
-	"strings"
 )
 
 // tokenEncoderMap won't grow after initialization
@@ -21,7 +23,8 @@ func InitTokenEncoders() {
 	logger.SysLog("initializing token encoders")
 	gpt35TokenEncoder, err := tiktoken.EncodingForModel("gpt-3.5-turbo")
 	if err != nil {
-		logger.FatalLog(fmt.Sprintf("failed to get gpt-3.5-turbo token encoder: %s", err.Error()))
+		logger.FatalLog(fmt.Sprintf("failed to get gpt-3.5-turbo token encoder: %s, "+
+			"if you are using in offline environment, please set TIKTOKEN_CACHE_DIR to use exsited files, check this link for more information: https://stackoverflow.com/questions/76106366/how-to-use-tiktoken-in-offline-mode-computer ", err.Error()))
 	}
 	defaultTokenEncoder = gpt35TokenEncoder
 	gpt4oTokenEncoder, err := tiktoken.EncodingForModel("gpt-4o")
@@ -97,7 +100,11 @@ func CountTokenMessages(messages []model.Message, model string) int {
 				m := it.(map[string]any)
 				switch m["type"] {
 				case "text":
-					tokenNum += getTokenNum(tokenEncoder, m["text"].(string))
+					if textValue, ok := m["text"]; ok {
+						if textString, ok := textValue.(string); ok {
+							tokenNum += getTokenNum(tokenEncoder, textString)
+						}
+					}
 				case "image_url":
 					imageUrl, ok := m["image_url"].(map[string]any)
 					if ok {
@@ -106,7 +113,7 @@ func CountTokenMessages(messages []model.Message, model string) int {
 						if imageUrl["detail"] != nil {
 							detail = imageUrl["detail"].(string)
 						}
-						imageTokens, err := countImageTokens(url, detail)
+						imageTokens, err := countImageTokens(url, detail, model)
 						if err != nil {
 							logger.SysError("error counting image tokens: " + err.Error())
 						} else {
@@ -130,11 +137,15 @@ const (
 	lowDetailCost         = 85
 	highDetailCostPerTile = 170
 	additionalCost        = 85
+	// gpt-4o-mini cost higher than other model
+	gpt4oMiniLowDetailCost  = 2833
+	gpt4oMiniHighDetailCost = 5667
+	gpt4oMiniAdditionalCost = 2833
 )
 
 // https://platform.openai.com/docs/guides/vision/calculating-costs
 // https://github.com/openai/openai-cookbook/blob/05e3f9be4c7a2ae7ecf029a7c32065b024730ebe/examples/How_to_count_tokens_with_tiktoken.ipynb
-func countImageTokens(url string, detail string) (_ int, err error) {
+func countImageTokens(url string, detail string, model string) (_ int, err error) {
 	var fetchSize = true
 	var width, height int
 	// Reference: https://platform.openai.com/docs/guides/vision/low-or-high-fidelity-image-understanding
@@ -168,6 +179,9 @@ func countImageTokens(url string, detail string) (_ int, err error) {
 	}
 	switch detail {
 	case "low":
+		if strings.HasPrefix(model, "gpt-4o-mini") {
+			return gpt4oMiniLowDetailCost, nil
+		}
 		return lowDetailCost, nil
 	case "high":
 		if fetchSize {
@@ -187,6 +201,9 @@ func countImageTokens(url string, detail string) (_ int, err error) {
 			height = int(float64(height) * ratio)
 		}
 		numSquares := int(math.Ceil(float64(width)/512) * math.Ceil(float64(height)/512))
+		if strings.HasPrefix(model, "gpt-4o-mini") {
+			return numSquares*gpt4oMiniHighDetailCost + gpt4oMiniAdditionalCost, nil
+		}
 		result := numSquares*highDetailCostPerTile + additionalCost
 		return result, nil
 	default:
